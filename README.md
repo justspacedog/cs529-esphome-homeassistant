@@ -1,6 +1,6 @@
 # Dual CS529 Turntable BLE Integration for ESPHome & Home Assistant
 
-ESPHome-based BLE integration for Dual CS-529 turntables. Connects via BLE to read and control Play/Stop/Tonearm movement, Speed (33/45/78 RPM), Repeat (total & remaining up to 99), Sleep Timer (10 s–42 min), and Bluetooth Pairing Mode. Exposes all controls as Home Assistant switches, numbers and sensors, plus a custom Lovelace Tile UI for status and controls.
+ESPHome-based BLE integration for Dual CS-529 turntables. Connects via BLE to read and control Play/Stop/Tonearm movement, Speed (33/45/78 RPM), Repeat (total & remaining up to 99), Sleep Timer (10 s–42 min), and Bluetooth Pairing Mode. Exposes all controls as Home Assistant switches, numbers and sensors, plus a custom Lovelace Tile UI for status and controls. You'll need to find out the MAC-Adress of your turntable with a bluetooth logger.
 
 ### Turntable BLE Command Reference
 
