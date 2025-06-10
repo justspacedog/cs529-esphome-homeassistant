@@ -1,0 +1,532 @@
+substitutions:
+  device_name: dualcs529
+  name: cs529
+  ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+  encryption_key: "yourencryptionkey"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable Bluetooth Proxy
+bluetooth_proxy:
+
+# Enable Bluetooth Low Energy
+esp32_ble_tracker:
+
+ble_client:
+  - mac_address: "MA:CA:DD:RE:SS:TT"  # ← your turntable’s MAC
+    id: turntable
+    auto_connect: true # Let it try to reconnect automatically
+
+    on_connect:
+      # Once we're connected, force the text_sensor to read once so you get your initial speed / play / repeat state
+      - component.update: notify
+        # as soon as we connect, fire off all the “?-queries” on FFF2
+      - delay: 200ms
+      # 1) Query firmware version: "@0?PTSTVN\r\n"
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x3F,0x50,0x54,0x53,0x54,0x56,0x4E,0x0D,0x0A]
+      - delay: 50ms
+      # 2) Query speed: "@0?PTTTRS\r\n"
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x3F,0x50,0x54,0x54,0x54,0x52,0x53,0x0D,0x0A]
+      - delay: 50ms
+      # 3) Query play/stop state: "@0?PTTTST\r\n"
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x3F,0x50,0x54,0x54,0x54,0x53,0x54,0x0D,0x0A]
+      - delay: 50ms
+      # 4) Query repeat count: "@0?PTTTRP\r\n" (Setting), "@0?PTTTRp\r\n" (current)
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x3F,0x50,0x54,0x54,0x54,0x52,0x50,0x0D,0x0A]
+      - delay: 50ms
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40, 0x30, 0x3F, 0x50, 0x54, 0x54, 0x54, 0x52, 0x70, 0x0D, 0x0A]
+      - delay: 50ms
+      # 5) Query repeat on/off: "@0?PTTTLS\r\n"
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x3F,0x50,0x54,0x54,0x54,0x4C,0x53,0x0D,0x0A]
+      # 6) Query sleep timer: "@0?PTTTSL\r\n"
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40, 0x30, 0x3F, 0x50, 0x54, 0x53, 0x54, 0x53, 0x4C, 0x0D, 0x0A]
+      - delay: 50ms
+
+    on_disconnect:
+      # If it ever drops, wait and reconnect
+      - delay: 5s
+      - ble_client.connect: turntable
+
+
+esphome:
+  name: dualcs529
+  friendly_name: Dual CS 529
+
+  on_boot:
+    then:
+      # On startup, give BLE stack a moment, then connect
+      - delay: 2s
+      - ble_client.connect: turntable
+
+api:
+  encryption:
+    key: ${encryption_key}
+
+ota:
+  password: yourpassword
+  platform: esphome
+
+logger:
+  level: DEBUG #INFO
+
+wifi:
+  ssid: ${ssid}
+  password: ${wifi_password}
+
+sensor:
+  - platform: template
+    name: "Speed"
+    id: speed_sensor
+    unit_of_measurement: "RPM"
+    icon: mdi:speedometer
+    accuracy_decimals: 0
+    lambda: |-
+      return id(speed_val);
+  
+  - platform: template
+    name: "Repeat Setting"
+    id: repeat_setting
+    icon: mdi:counter
+    accuracy_decimals: 0
+    entity_category: "diagnostic"
+    lambda: |-
+      return id(repeat_setting_val);
+
+  - platform: template
+    name: "Repeat Remaining"
+    id: repeat_remaining
+    icon: mdi:counter
+    accuracy_decimals: 0
+    entity_category: "diagnostic"
+    lambda: |-
+      return id(repeat_remaining_val);
+
+  - platform: template
+    name: "Sleep Timer (0 = never)"
+    id: sleep_timer_sensor
+    unit_of_measurement: "s"
+    icon: mdi:timer-sand
+    accuracy_decimals: 0
+    internal: true
+    lambda: |-
+      // stored value is in 10s-units
+      return id(sleep_timer_val) * 10;
+
+binary_sensor:
+  - platform: template
+    name: "Repeat"
+    id: repeat_on
+    icon: mdi:repeat
+    internal: true
+    lambda: |-
+      return id(repeat_val) == 1;
+
+  - platform: template
+    name: "Pairing Mode"
+    id: pairing
+    icon: mdi:bluetooth
+    internal: true
+    lambda: |-
+      return id(pairing_val);
+
+text_sensor:
+  # Raw BLE notification listener: on_notify gives you the full byte array as `x`
+  - platform: ble_client
+    ble_client_id: turntable
+    service_uuid: "FFF0"
+    characteristic_uuid: "FFF1"
+    notify: true
+    id: notify
+    internal: true
+
+    on_notify:
+      then:
+        - lambda: |-
+            std::string msg = x;
+            ESP_LOGD("ble_notify", "Received BLE message: '%s'", msg.c_str());
+            int L = msg.size();
+
+            // FIRMWARE: "@0PTSTVN…(x.yz)\r\n"
+            if (msg.rfind("@0PTSTVN", 0) == 0 && L > 10) {
+              size_t p1 = msg.find('(');
+              size_t p2 = msg.find(')', p1 == std::string::npos ? 0 : p1);
+              if (p1 != std::string::npos && p2 != std::string::npos && p2 > p1) {
+                std::string fw = msg.substr(p1 + 1, p2 - p1 - 1);
+                id(firmware_val) = fw;
+                id(firmware).publish_state(fw);
+                ESP_LOGD("ble_notify", "→ Parsed Firmware: %s", fw.c_str());
+              }
+            }
+            // SLEEP‐TIMER: "@0PTSTSLxxx\r\n"
+            else if (msg.rfind("@0PTSTSL", 0) == 0) {
+              int units10s = (msg[L - 5] - '0') * 100
+                           + (msg[L - 4] - '0') * 10
+                           + (msg[L - 3] - '0');
+              id(sleep_timer_val) = units10s;
+              id(sleep_timer_sensor).publish_state(units10s * 10);
+              id(sleep_timer).publish_state(units10s);
+              ESP_LOGD("ble_notify",
+                       "→ Parsed Sleep Timer = %03d (→ %d s)",
+                       units10s, units10s * 10);
+            }
+            int code = (msg[L-4] - '0')*10 + (msg[L-3] - '0');
+
+            // SPEED: "@0PTTTRSxx"
+            if (msg.rfind("@0PTTTRS", 0) == 0) {
+              id(speed_val) = code;
+              id(speed_sensor).publish_state(code);
+            }
+
+            // STATUS (PLAY/STOP/TONEARM MOVING): "@0PTTTSTxx\r\n"
+            if (msg.rfind("@0PTTTST", 0) == 0) {
+              int code = (msg[L - 4] - '0') * 10 + (msg[L - 3] - '0');
+
+              // Compose new “Status” string:
+              if (code == 0) {
+                id(status).publish_state("Stopped");
+              } else if (code == 1) {
+                id(status).publish_state("Playing");
+              } else if (code == 3) {
+                id(status).publish_state("Starting…");
+              } else if (code == 4) {
+                id(status).publish_state("Stopping…");
+              } 
+
+              ESP_LOGD("ble_notify", "→ Parsed Play/Stop: code=%02d", code);
+            }
+
+            // REPEAT ON/OFF (TLSxx) — clear “got total” only once here
+            else if (msg.rfind("@0PTTTLS", 0) == 0) {
+              bool rpt = (code != 0);
+              id(repeat_val) = rpt;
+              id(repeat_on).publish_state(rpt);
+            }
+            // REPEAT TOTAL: catch exactly “@0PTTTRPxx”
+            if (msg.rfind("@0PTTTRP", 0) == 0) {
+              // Only the FIRST time we see @0PTTTRP… after TLS01
+              id(repeat_setting_val) = code;
+              id(repeat_setting).publish_state(code);
+              // Also publish it immediately as “remaining” for that initial packet
+              id(repeat_remaining_val) = code;
+              id(repeat_remaining).publish_state(code);
+            }
+            // REPEAT REMAINING: catch “@0PTTTRpxx” (lowercase “p”)
+            if (msg.rfind("@0PTTTRp", 0) == 0) {
+              id(repeat_remaining_val) = code;
+              id(repeat_remaining).publish_state(code);
+              id(repeat_count).publish_state(code);
+            }
+
+            // PAIRING MODE OFF on press-down if we were ON —
+            // (packets: "@30PTBTS…01\r\n")
+            if (msg.rfind("@0PTBTS", 0) == 0
+                && code == 1
+                && id(pairing_val)) {
+              id(pairing_val) = false;
+              id(pairing).publish_state(false);
+              id(pairing_last_off) = millis();  // stamp the off-time
+            }
+            // PAIRING MODE ON only if genuine telemetry arrives >2 s later (sometimes the LED is blinking again after mode has turned off)
+            // (telemetry: "@30PTBTLT…xx\r\n")
+            else if (msg.rfind("@0PTBTLT", 0) == 0) {
+              unsigned long off_ts = id(pairing_last_off);
+              if (millis() - off_ts > 2000) {
+                // long‐enough after OFF → real ON
+                id(pairing_val) = true;
+                id(pairing).publish_state(true);
+              } else {
+                ESP_LOGD("ble_notify", "Ignoring stray PTBTLT right after OFF");
+              }
+            }
+
+  - platform: template
+    name: "Current Status"
+    id: status
+    icon: mdi:equalizer
+
+  - platform: template
+    name: "Firmware"
+    id: firmware
+
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: "config"
+
+  - platform: template
+    name: "Speed 33 RPM"
+    icon: mdi:speedometer-slow
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x50,0x54,0x54,0x54,0x52,0x53,0x33,0x33,0x0D,0x0A]
+
+  - platform: template
+    name: "Speed 45 RPM"
+    icon: mdi:speedometer-medium
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x50,0x54,0x54,0x54,0x52,0x53,0x34,0x35,0x0D,0x0A]
+
+  - platform: template
+    name: "Speed 78 RPM"
+    icon: mdi:speedometer
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x50,0x54,0x54,0x54,0x52,0x53,0x37,0x38,0x0D,0x0A]
+
+  - platform: template
+    name: "Start"
+    icon: mdi:play-circlee
+    id: play_btn
+    internal: true
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x53, 0x54, 0x30, 0x31, 0x0D, 0x0A]
+
+  - platform: template
+    name: "Stop"
+    icon: mdi:stop-circle
+    id: stop_btn
+    internal: true
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x53, 0x54, 0x30, 0x30, 0x0D, 0x0A]
+
+  - platform: template
+    name: "Repeat On"
+    icon: mdi:repeat
+    id: repeat_on_btn
+    internal: true
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x4C, 0x53, 0x30, 0x31, 0x0D, 0x0A]
+
+  - platform: template
+    name: "Repeat Off"
+    icon: mdi:repeat-off
+    id: repeat_off_btn
+    internal: true
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x4C, 0x53, 0x30, 0x30, 0x0D, 0x0A]
+
+  - platform: template
+    name: "Pairing Toggle"
+    icon: mdi:bluetooth
+    id: pair_btn
+    internal: true
+    on_press:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x53,0x54,0x30,0x31,0x0D,0x0A]
+      - delay: 150ms
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x53,0x54,0x30,0x30,0x0D,0x0A]
+      - component.update: notify
+
+  - platform: template
+    name: "Connect"
+    icon: mdi:bluetooth-connect
+    entity_category: "config"
+    on_press:
+      - logger.log:
+          format: "[BLE] ⇨ Connecting to Turntable…"
+          level: INFO
+      - ble_client.connect: turntable
+      - delay: 1000ms
+      - logger.log:
+          format: "[BLE] Connected? %s"
+          args: ['id(turntable).connected() ? "yes" : "no"']
+
+  - platform: template
+    name: "Disconnect"
+    icon: mdi:bluetooth-off
+    entity_category: "config"
+    on_press:
+      - logger.log:
+          format: "[BLE] ⇨ Disconnecting…"
+          level: INFO
+      - ble_client.disconnect: turntable
+      - delay: 200ms
+      - logger.log:
+          format: "[BLE] Connected? %s"
+          args: ['id(turntable).connected() ? "yes" : "no"']
+
+switch:
+  - platform: template
+    name: "Play/Stop"
+    id: play_switch
+    optimistic: false
+
+    lambda: |-
+      return (id(status).state == "Playing");
+
+    turn_on_action:
+      - button.press: play_btn
+    turn_off_action:
+      - button.press: stop_btn
+
+  - platform: template
+    name: "Repeat"
+    id: repeat_switch
+    optimistic: false
+
+    lambda: |-
+      return id(repeat_val);  // true if repeat ON
+
+    turn_on_action:
+      - button.press: repeat_on_btn
+    turn_off_action:
+      - button.press: repeat_off_btn
+
+  - platform: template
+    name: "Pairing"
+    id: pairing_switch
+    optimistic: false
+
+    lambda: |-
+      return id(pairing_val);  // true if pairing mode ON
+
+    turn_on_action:
+      - button.press: pair_btn
+    turn_off_action:
+      - button.press: pair_btn
+
+globals:
+  - id: speed_val
+    type: int
+    restore_value: yes
+    initial_value: ""
+  - id: pairing_val
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: pairing_last_off
+    type: unsigned long
+    initial_value: '0'
+  - id: repeat_val
+    type: int
+    restore_value: yes
+    initial_value: "0"
+  - id: repeat_setting_val
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: repeat_remaining_val
+    type: int
+    initial_value: '0'
+    restore_value: no
+  - id: sleep_timer_val
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: firmware_val
+    type: std::string
+    restore_value: no
+    initial_value: ""
+
+number:
+  - platform: template
+    name: "Repeat Count"
+    id: repeat_count
+    min_value: 0
+    max_value: 99 # more than 99 isn't possible
+    step: 1
+    optimistic: false
+    lambda: |-
+      return id(repeat_remaining_val);
+    set_action:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: !lambda |-
+            char buf[16];
+            int len = snprintf(buf, sizeof(buf),
+                              "@0PTTTRP%02d\r\n", int(x));
+            return std::vector<uint8_t>(buf, buf + len);
+      - delay: 200ms
+      - component.update: notify
+      - delay: 50ms
+
+  - platform: template
+    name: "Sleep Timer (10s units; 0 = never)"
+    id: sleep_timer
+    min_value: 0
+    max_value: 255   # → 180×10 s = 1800 s = 30 minutes; more than 255 (= 42 min. and 30 sek.) is not possible to set (if you send it it repeats the last setted value)
+    step: 1
+    optimistic: false
+
+    lambda: |-
+      return id(sleep_timer_val);
+
+    set_action:
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: !lambda |-
+            char buf[16];
+            int len = snprintf(buf, sizeof(buf),
+                                "@0PTSTSL%03d\r\n", int(x));
+            return std::vector<uint8_t>(buf, buf + len);
+      - delay: 200ms
+      - component.update: notify
