@@ -289,38 +289,38 @@ cards:
       - type: custom:service-call
         entries:
           - type: selector
-            entity_id: sensor.dualcs529_speed
+            entity_id: select.dualcs529_speed
             value_attribute: state
             options:
               - type: button
                 entity_id: sensor.dualcs529_speed
                 icon: mdi:speedometer-slow
-                option: "33"
+                option: 33 RPM
                 tap_action:
                   action: call-service
-                  service: button.press
+                  service: select.select_option
                   target:
-                    entity_id: button.dualcs529_speed_33_rpm
+                    entity_id: select.dualcs529_speed
               - type: button
                 entity_id: sensor.dualcs529_speed
                 icon: mdi:speedometer-medium
-                option: "45"
+                option: 45 RPM
                 tap_action:
                   action: call-service
-                  service: button.press
+                  service: select.select_option
                   target:
-                    entity_id: button.dualcs529_speed_45_rpm
+                    entity_id: select.dualcs529_speed
               - type: button
                 entity_id: sensor.dualcs529_speed
                 icon: mdi:speedometer
-                option: "78"
+                option: 78 RPM
                 tap_action:
                   action: call-service
-                  service: button.press
+                  service: select.select_option
                   target:
-                    entity_id: button.dualcs529_speed_78_rpm
+                    entity_id: select.dualcs529_speed
     type: tile
-    entity: sensor.dualcs529_speed
+    entity: select.dualcs529_speed
     color: deepskyblue
     vertical: false
     layout_options:
