@@ -441,7 +441,7 @@ number:
 select:
   - platform: template
     name: "Turntable Speed"
-    id: turntable_speed
+    id: speed
     icon: mdi:speedometer
     optimistic: false
 
