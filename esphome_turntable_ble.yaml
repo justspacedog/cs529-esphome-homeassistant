@@ -1,30 +1,22 @@
 substitutions:
-  device_name: dualcs529
-  name: cs529
-  ssid: !secret wifi_ssid
-  wifi_password: !secret wifi_password
-  encryption_key: "yourencryptionkey"
-
+  device_name: Turntable
+  devicename: "turntable"
+  
 esp32:
   board: esp32dev
   framework:
     type: arduino
 
-# Enable Bluetooth Proxy
-bluetooth_proxy:
-
-# Enable Bluetooth Low Energy
-esp32_ble_tracker:
+#bluetooth_proxy:
+#esp32_ble_tracker:
 
 ble_client:
-  - mac_address: "MA:CA:DD:RE:SS:TT"  # ← your turntable’s MAC
+  - mac_address: !secret turntable_mac_address
     id: turntable
-    auto_connect: true # Let it try to reconnect automatically
+    auto_connect: true
 
     on_connect:
-      # Once we're connected, force the text_sensor to read once so you get your initial speed / play / repeat state
       - component.update: notify
-        # as soon as we connect, fire off all the “?-queries” on FFF2
       - delay: 200ms
       # 1) Query firmware version: "@0?PTSTVN\r\n"
       - ble_client.ble_write:
@@ -73,46 +65,69 @@ ble_client:
           characteristic_uuid: "FFF2"
           value: [0x40, 0x30, 0x3F, 0x50, 0x54, 0x53, 0x54, 0x53, 0x4C, 0x0D, 0x0A]
       - delay: 50ms
+      # Query pairing button state: "@0?PTBTST\r\n"
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x3F,0x50,0x54,0x42,0x54,0x4C,0x54,0x0D,0x0A]
+      
 
     on_disconnect:
-      # If it ever drops, wait and reconnect
       - delay: 5s
       - ble_client.connect: turntable
 
 
 esphome:
-  name: dualcs529
-  friendly_name: Dual CS 529
+  name: ${devicename}
+  friendly_name: ${device_name}
+  comment: Used to control your ${device_name} standing desk via Home Assistant.
+  platformio_options:
+    board_build.partitions: huge_app.csv
 
   on_boot:
     then:
-      # On startup, give BLE stack a moment, then connect
       - delay: 2s
       - ble_client.connect: turntable
 
 api:
   encryption:
-    key: ${encryption_key}
+    key: !secret encryption_key_turntable
 
 ota:
-  password: yourpassword
+  password: !secret ota_password
   platform: esphome
 
+# Disable logging over serial
 logger:
   level: DEBUG #INFO
+  #baud_rate: 0
 
 wifi:
-  ssid: ${ssid}
-  password: ${wifi_password}
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: ${devicename} Fallback Hotspot
+    password: !secret ap_fallback_password
 
 sensor:
+  - platform: wifi_signal
+    name: "${devicename} WiFi Signal"
+    update_interval: 60s
+
+  - platform: uptime
+    name: Uptime
+
   - platform: template
     name: "Repeat Remaining"
     id: repeat_remaining
+    unit_of_measurement: ""
     icon: mdi:counter
     accuracy_decimals: 0
     entity_category: "diagnostic"
     lambda: |-
+      // Force it to be an integer-returning float:
       return id(repeat_remaining_val);
 
   - platform: template
@@ -127,7 +142,6 @@ sensor:
       return id(sleep_timer_val) * 10;
 
 text_sensor:
-  # Raw BLE notification listener: on_notify gives you the full byte array as `x`
   - platform: ble_client
     ble_client_id: turntable
     service_uuid: "FFF0"
@@ -142,191 +156,201 @@ text_sensor:
             std::string msg = x;
             ESP_LOGD("ble_notify", "Received BLE message: '%s'", msg.c_str());
             int L = msg.size();
-            int code = (msg[L-4] - '0')*10 + (msg[L-3] - '0');
+            int code = (msg[L - 4] - '0') * 10 + (msg[L - 3] - '0');
 
-            // FIRMWARE: "@0PTSTVN…(x.yz)\r\n"
+            // FIRMWARE "@0PTSTVN…(x.yz)\r\n"
             if (msg.rfind("@0PTSTVN", 0) == 0 && L > 10) {
               size_t p1 = msg.find('(');
               size_t p2 = msg.find(')', p1 == std::string::npos ? 0 : p1);
               if (p1 != std::string::npos && p2 != std::string::npos && p2 > p1) {
                 std::string fw = msg.substr(p1 + 1, p2 - p1 - 1);
-                id(turntable_firmware_val) = fw;
-                id(turntable_firmware).publish_state(fw);
+                id(firmware_val) = fw;
+                id(firmware).publish_state(fw);
                 ESP_LOGD("ble_notify", "→ Parsed Firmware: %s", fw.c_str());
               }
             }
-            // SLEEP‐TIMER: "@0PTSTSLxxx\r\n"
+
+            // SLEEP‐TIMER "@0PTSTSLxxx\r\n"
             else if (msg.rfind("@0PTSTSL", 0) == 0) {
               int units10s = (msg[L - 5] - '0') * 100
                            + (msg[L - 4] - '0') * 10
                            + (msg[L - 3] - '0');
-              id(turntable_sleep_timer_val) = units10s;
-              id(turntable_sleep_timer_sensor).publish_state(units10s * 10);
+              id(sleep_timer_val) = units10s;
+              id(sleep_timer_sensor).publish_state(units10s * 10);
               id(sleep_timer).publish_state(units10s);
               ESP_LOGD("ble_notify",
                        "→ Parsed Sleep Timer = %03d (→ %d s)",
                        units10s, units10s * 10);
             }
 
-            // SPEED: "@0PTTTRSxx"
+            // SPEED "@0PTTTRSxx"
             if (msg.rfind("@0PTTTRS", 0) == 0) {
-              id(turntable_speed_val) = code;
+              id(speed_val) = code;
 
               std::string speed_str = std::to_string(code) + " RPM";
-              id(turntable_speed).publish_state(speed_str);
+              id(speed).publish_state(speed_str);
+
+              //FORFAN: otherwise it would start the player when it justs read the current speed (f.e. on every restart and speed change)
+              uint8_t idx = (code == 33 ? 1 : code == 45 ? 2 : 3);
+              if (id(playing_state).state == "Playing") {
+                id(turntable_fan).turn_on().set_speed(idx).perform();
+              } else {
+                id(turntable_fan).turn_off().set_speed(idx).perform();
+              }
             }
 
-            // STATUS (PLAY/STOP/TONEARM MOVING): "@0PTTTSTxx\r\n"
+            // STATUS (PLAY/STOP/STARTING/STOPPING) "@0PTTTSTxx\r\n"
             if (msg.rfind("@0PTTTST", 0) == 0) {
-              int code = (msg[L - 4] - '0') * 10 + (msg[L - 3] - '0');
-
               // Compose new “Status” string:
               if (code == 0) {
-                id(turntable_status).publish_state("Stopped");
+                id(playing_state).publish_state("Stopped");
+                //FORFAN
+                id(turntable_fan).turn_off().perform();
               } else if (code == 1) {
-                id(turntable_status).publish_state("Playing");
+                id(playing_state).publish_state("Playing");
+                //FORFAN
+                id(turntable_fan).turn_on().perform();
               } else if (code == 3) {
-                id(turntable_status).publish_state("Starting…");
+                id(playing_state).publish_state("Starting…");
               } else if (code == 4) {
-                id(turntable_status).publish_state("Stopping…");
+                id(playing_state).publish_state("Stopping…");
               } 
 
               ESP_LOGD("ble_notify", "→ Parsed Play/Stop: code=%02d",
                        code);
             }
-
-            // REPEAT ON/OFF (TLSxx) — clear “got total” only once here
+            
+            // REPEAT ON or OFF (TLSxx) — clear “got total” only once here
             else if (msg.rfind("@0PTTTLS", 0) == 0) {
               bool rpt = (code != 0);
-              id(turntable_repeat_val) = rpt;
+              id(repeat_val) = rpt;
             }
             // REPEAT TOTAL: catch exactly “@0PTTTRPxx”
             if (msg.rfind("@0PTTTRP", 0) == 0) {
-              // Only the FIRST time we see @0PTTTRP… after TLS01
-              id(turntable_repeat_setting_val) = code;
-              // Also publish it immediately as “remaining” for that initial packet
-              id(turntable_repeat_remaining_val) = code;
-              id(turntable_repeat_remaining).publish_state(code);
+              id(repeat_setting_val) = code;
+              id(repeat_count).publish_state(code);
             }
             // REPEAT REMAINING: catch “@0PTTTRpxx” (lowercase “p”)
             if (msg.rfind("@0PTTTRp", 0) == 0) {
-              id(turntable_repeat_remaining_val) = code;
-              id(turntable_repeat_remaining).publish_state(code);
-              id(repeat_count).publish_state(code);
+              id(repeat_remaining_val) = code;
+              id(repeat_remaining).publish_state(code);
             }
-
-            // PAIRING MODE OFF on press-down if we were ON —
-            // (packets: "@30PTBTS…01\r\n")
-            if (msg.rfind("@0PTBTS", 0) == 0
-                && code == 1
-                && id(turntable_pairing_val)) {
-              id(turntable_pairing_val) = false;
-              id(pairing_last_off) = millis();  // stamp the off-time
+            
+            // BLUETOOTH PAIRING "0PTBTLT"
+            if (msg.rfind("@0PTBTLT", 0) == 0) {
+                unsigned long now = millis();
+                if (code != id(last_btlt)) {
+                    // capture previous timestamp and current
+                    unsigned long prev_time = id(last_change);
+                    unsigned long now       = millis();
+                
+                    // update codes and timestamps
+                    id(prev_btlt)      = id(last_btlt);
+                    id(last_btlt)      = code;
+                    id(last_change)    = now;
+                    id(last_scheduled) = now;
+                
+                    // only treat as blinking if alternation is faster than 500 ms
+                    unsigned long delta = now - prev_time;
+                    if (delta < 500 && id(prev_btlt) != -1) {
+                        // Off ↔ Blue?
+                        if ((id(prev_btlt) == 0 && code == 1) ||
+                            (id(prev_btlt) == 1 && code == 0)) {
+                            id(bluetooth_connection_state).publish_state("Connecting…"); // = Blinking Off/Blue LED
+                        }
+                        // Blue ↔ Red?
+                        else if ((id(prev_btlt) == 1 && code == 2) ||
+                                 (id(prev_btlt) == 2 && code == 1)) {
+                            id(bluetooth_connection_state).publish_state("Pairing…"); // = Blinking Blue/Red LED
+                        }
+                    }
+                }
             }
-            // PAIRING MODE ON only if genuine telemetry arrives >2 s later —
-            // (telemetry: "@30PTBTLT…xx\r\n")
-            else if (msg.rfind("@0PTBTLT", 0) == 0) {
-              unsigned long off_ts = id(pairing_last_off);
-              if (millis() - off_ts > 2000) {
-                // long‐enough after OFF → real ON
-                id(turntable_pairing_val) = true;
-              } else {
-                ESP_LOGD("ble_notify", "Ignoring stray PTBTLT right after OFF");
-              }
-            }
+        - script.execute: ble_connected_check
 
   - platform: template
-    name: "Current Status"
-    id: status
-    icon: mdi:equalizer
+    name: "Bluetooth"
+    id: bluetooth_connection_state
+    icon: mdi:bluetooth
+
+  - platform: template
+    name: "Current State"
+    id: playing_state
+    icon: mdi:play-pause
 
   - platform: template
     name: "Firmware"
     id: firmware
+    icon: mdi:chip
+
+script:
+  - id: ble_connected_check
+    mode: restart
+    then:
+      - delay: 3000ms
+      - lambda: |-
+          // only publish SOLID if no new PTBTLT in the last 2 s
+          if (id(last_change) == id(last_scheduled)) {
+            if (id(last_btlt) == 1) {
+              id(bluetooth_connection_state).publish_state("Connected"); // = Solid Blue LED
+            }
+            else if (id(last_btlt) == 2) {
+              id(bluetooth_connection_state).publish_state("Disconnected"); // = Solid Red LED
+            }
+          }
 
 button:
-  - platform: restart
-    name: "Restart"
-    entity_category: "config"
-
   - platform: template
     name: "Pairing Toggle"
     icon: mdi:bluetooth
-    id: pair_btn
+    id: bluetooth_connect_toggle
     internal: true
     on_press:
       - ble_client.ble_write:
           id: turntable
           service_uuid: "FFF0"
           characteristic_uuid: "FFF2"
-          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x53,0x54,0x30,0x31,0x0D,0x0A]
+          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x53,0x54,0x30,0x31,0x0D,0x0A] # "@0PTBTS01\r\n"
       - delay: 150ms
       - ble_client.ble_write:
           id: turntable
           service_uuid: "FFF0"
           characteristic_uuid: "FFF2"
-          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x53,0x54,0x30,0x30,0x0D,0x0A]
+          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x53,0x54,0x30,0x30,0x0D,0x0A] # "`@0PTBTS00\r\n"
+      - component.update: notify
+      
+  - platform: template
+    name: "Pairing Long Press"
+    icon: mdi:bluetooth-connect
+    id: bluetooth_pairing_button
+    internal: true
+    on_press:
+      # 1) Simulate press-down (this stamps pairing_last_off)
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x53,0x54,0x30,0x31,0x0D,0x0A]  # "@0PTBTS01\r\n"
+      - ble_client.ble_write:
+          id: turntable
+          service_uuid: "FFF0"
+          characteristic_uuid: "FFF2"
+          value: [0x40,0x30,0x50,0x54,0x42,0x54,0x4C,0x54,0x30,0x31,0x0D,0x0A]  # "@0PTBTLT01\r\n"
       - component.update: notify
 
-  - platform: template
-    name: "Connect"
-    icon: mdi:bluetooth-connect
+  - platform: restart
+    name: "Restart"
     entity_category: "config"
-    on_press:
-      - logger.log:
-          format: "[BLE] ⇨ Connecting to Turntable…"
-          level: INFO
-      - ble_client.connect: turntable
-      - delay: 1000ms
-      - logger.log:
-          format: "[BLE] Connected? %s"
-          args: ['id(turntable).connected() ? "yes" : "no"']
-
-  - platform: template
-    name: "Disconnect"
-    icon: mdi:bluetooth-off
-    entity_category: "config"
-    on_press:
-      - logger.log:
-          format: "[BLE] ⇨ Disconnecting…"
-          level: INFO
-      - ble_client.disconnect: turntable
-      - delay: 200ms
-      - logger.log:
-          format: "[BLE] Connected? %s"
-          args: ['id(turntable).connected() ? "yes" : "no"']
 
 switch:
   - platform: template
-    name: "Turntable Play/Stop"
-    id: turntable_play_switch
-    icon: mdi:play-circle
-    optimistic: false
-
-    lambda: |-
-      return (id(turntable_status).state == "Playing");
-
-    turn_on_action:
-      - ble_client.ble_write:
-          id: turntable
-          service_uuid: "FFF0"
-          characteristic_uuid: "FFF2"
-          value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x53, 0x54, 0x30, 0x31, 0x0D, 0x0A]
-    turn_off_action:
-      - ble_client.ble_write:
-          id: turntable
-          service_uuid: "FFF0"
-          characteristic_uuid: "FFF2"
-          value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x53, 0x54, 0x30, 0x30, 0x0D, 0x0A]
-
-  - platform: template
-    name: "Turntable Repeat"
-    id: turntable_repeat_switch
+    name: "Repeat"
+    id: repeat_switch
     icon: mdi:repeat-variant
     optimistic: false
 
     lambda: |-
-      return id(turntable_repeat_val);
+      return id(repeat_val);
 
     turn_on_action:
       - ble_client.ble_write:
@@ -342,51 +366,92 @@ switch:
           value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x4C, 0x53, 0x30, 0x30, 0x0D, 0x0A]
 
   - platform: template
-    name: "Turntable Pairing"
-    id: turntable_pairing_switch
+    name: "Bluetooth"
+    id: bluetooth_connect_switch
     icon: mdi:bluetooth-connect
     optimistic: false
 
     lambda: |-
-      return id(turntable_pairing_val);  // true if pairing mode ON
+      {
+        const std::string &st = id(bluetooth_connection_state).state;
+        return (st == "Connected" || st == "Connecting…");
+      }
 
     turn_on_action:
-      - button.press: turntable_pair_btn
+      - button.press: bluetooth_connect_toggle
     turn_off_action:
-      - button.press: turntable_pair_btn
+      - button.press: bluetooth_connect_toggle
+      
+  - platform: template
+    name: "Bluetooth Pairing"
+    id: bluetooth_pairing_switch
+    icon: mdi:bluetooth-connect
+    optimistic: false
+
+    lambda: |-
+      return (id(bluetooth_connection_state).state == "Pairing…");
+
+    turn_on_action:
+      - button.press: bluetooth_pairing_button
+    turn_off_action:
+      - button.press: bluetooth_connect_toggle
+
+  - platform: template
+    name: "BLE Connection"
+    icon: mdi:bluetooth
+    entity_category: config
+    optimistic: false
+    lambda: |-
+      // Reflect the actual BLE client connection state
+      return id(turntable).connected();
+    turn_on_action:
+      - ble_client.connect: turntable
+      - delay: 1000ms
+    turn_off_action:
+      - ble_client.disconnect: turntable
+      - delay: 200ms
 
 globals:
-  - id: turntable_speed_val
+  - id: speed_val
     type: int
     restore_value: no
     initial_value: ""
-  - id: turntable_pairing_val
-    type: bool
-    restore_value: no
-    initial_value: "false"
-  - id: pairing_last_off
-    type: unsigned long
-    initial_value: '0'
-  - id: turntable_repeat_val
+  - id: repeat_val
     type: int
     restore_value: no
     initial_value: "0"
-  - id: turntable_repeat_setting_val
+  - id: repeat_setting_val
     type: int
     restore_value: no
     initial_value: "0"
-  - id: turntable_repeat_remaining_val
+  - id: repeat_remaining_val
     type: int
     initial_value: '0'
     restore_value: no
-  - id: turntable_sleep_timer_val
+  - id: sleep_timer_val
     type: int
     restore_value: no
     initial_value: "0"
-  - id: turntable_firmware_val
+  - id: firmware_val
     type: std::string
     restore_value: no
     initial_value: ""
+  - id: last_btlt
+    type: int
+    restore_value: no
+    initial_value: "-1"
+  - id: prev_btlt
+    type: int
+    restore_value: no
+    initial_value: "-1"
+  - id: last_change
+    type: unsigned long
+    restore_value: no
+    initial_value: "0"
+  - id: last_scheduled
+    type: unsigned long
+    restore_value: no
+    initial_value: "0"
 
 number:
   - platform: template
@@ -398,7 +463,7 @@ number:
     step: 1
     optimistic: false
     lambda: |-
-      return id(repeat_remaining_val);
+      return id(repeat_setting_val);
     set_action:
       - ble_client.ble_write:
           id: turntable
@@ -409,9 +474,7 @@ number:
             int len = snprintf(buf, sizeof(buf),
                               "@0PTTTRP%02d\r\n", int(x));
             return std::vector<uint8_t>(buf, buf + len);
-      - delay: 200ms
       - component.update: notify
-      - delay: 50ms
 
   - platform: template
     name: "Sleep Timer (10s units; 0 = never)"
@@ -440,7 +503,7 @@ number:
 
 select:
   - platform: template
-    name: "Turntable Speed"
+    name: "Speed"
     id: speed
     icon: mdi:speedometer
     optimistic: false
@@ -452,16 +515,16 @@ select:
 
     lambda: |-
       char buf[16];
-      snprintf(buf, sizeof(buf), "%d RPM", id(turntable_speed_val));
+      snprintf(buf, sizeof(buf), "%d RPM", id(speed_val));
       ESP_LOGD("speed_select", "Returning: '%s'", buf);
       return std::string(buf);
 
     set_action:
       then:
         - lambda: |-
-            if (x == "33 RPM")   id(turntable_speed_val) = 33;
-            else if (x == "45 RPM")  id(turntable_speed_val) = 45;
-            else if (x == "78 RPM")  id(turntable_speed_val) = 78;
+            if (x == "33 RPM")   id(speed_val) = 33;
+            else if (x == "45 RPM")  id(speed_val) = 45;
+            else if (x == "78 RPM")  id(speed_val) = 78;
 
         - ble_client.ble_write:
             id: turntable
@@ -472,9 +535,85 @@ select:
               int len = snprintf(
                 buf, sizeof(buf),
                 "@0PTTTRS%02d\r\n",
-                id(turntable_speed_val)
+                id(speed_val)
               );
               return std::vector<uint8_t>(buf, buf + len);
 
         - delay: 50ms
-        - component.update: turntable_notify
+        - component.update: notify
+
+fan:
+  - platform: template
+    id: turntable_fan
+    name: "Turntable"
+    icon: mdi:album
+    speed_count: 3
+    
+    on_turn_on:
+      then:
+        # If stopped, turn it on; otherwise only set the speed (there is no optimistic: false for the fan entity)
+        - if:
+            condition:
+              lambda: |-
+                return (id(playing_state).state == "Stopped");
+            then:
+              - ble_client.ble_write:
+                  id: turntable
+                  service_uuid: "FFF0"
+                  characteristic_uuid: "FFF2"
+                  value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x53, 0x54, 0x30, 0x31, 0x0D, 0x0A]
+              - fan.turn_on:
+                  id: turntable_fan
+                  speed: !lambda |-
+                    int rpm = id(speed_val);
+                    if (rpm == 33) return 1;
+                    if (rpm == 45) return 2;
+                    if (rpm == 78) return 3;
+                    return 1;
+            else:
+              - ble_client.ble_write:
+                  id: turntable
+                  service_uuid: "FFF0"
+                  characteristic_uuid: "FFF2"
+                  value: !lambda |-
+                    char buf[16];
+                    int len = snprintf(buf, sizeof(buf),
+                                      "@0PTTTRS%02d\r\n",
+                                      id(speed_val));
+                    return std::vector<uint8_t>(buf, buf + len);
+              - delay: 50ms
+              - component.update: notify
+
+    on_turn_off:
+      then:
+        - if:
+            condition:
+              lambda: |-
+                return (id(playing_state).state == "Playing");
+            then:
+              - ble_client.ble_write:
+                  id: turntable
+                  service_uuid: "FFF0"
+                  characteristic_uuid: "FFF2"
+                  value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x53, 0x54, 0x30, 0x30, 0x0D, 0x0A]
+
+    on_speed_set:
+      then:
+        - lambda: |-
+            int rpm;
+            if (x == 1) rpm = 33;
+            else if (x == 2) rpm = 45;
+            else if (x == 3) rpm = 78;
+            id(speed_val) = rpm;
+        - ble_client.ble_write:
+            id: turntable
+            service_uuid: "FFF0"
+            characteristic_uuid: "FFF2"
+            value: !lambda |-
+              char buf[16];
+              int len = snprintf(buf, sizeof(buf),
+                                 "@0PTTTRS%02d\r\n",
+                                 id(speed_val));
+              return std::vector<uint8_t>(buf, buf + len);
+        - delay: 50ms
+        - component.update: notify
