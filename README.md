@@ -23,7 +23,7 @@ and the deck responds immediately.
 
 ## Why is it a fan?
 
-We’ve all been there: you put on [a long play that’s actually **45 RPM**](https://www.discogs.com/fr/master/3879535-Martin-Luke-Brown-Damn-Look-At-The-View), or albums where [each disc spins at a different speed](https://en.wikipedia.org/wiki/Sable%2C_Fable). With a fan entity you can simply say:  
+We’ve all been there: you put on [a long play that’s actually 45 RPM](https://www.discogs.com/fr/master/3879535-Martin-Luke-Brown-Damn-Look-At-The-View), or albums where [each disc spins at a different speed](https://en.wikipedia.org/wiki/Sable%2C_Fable). With a fan entity you can simply say:  
 
 > “**Siri, set the turntable to 33 RPM**"
 
