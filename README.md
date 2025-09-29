@@ -1,4 +1,6 @@
 # Dual CS 529 Turntable — ESPHome BLE Integration (Home Assistant)
+<img width="70%" alt="tiles" src="https://github.com/user-attachments/assets/9c797418-38dd-489e-b732-b0d219980ce5"/>
+
 
 This project lets you control your **Dual CS 529** turntable over **Bluetooth Low Energy (BLE)** with **ESPHome** and **Home Assistant**.  
 Instead of fumbling with the clunky official app, you can now say:
@@ -53,9 +55,3 @@ Below are the raw BLE messages used by the Dual CS 529 turntable, their meanings
 | `@0PTTTSTSLxxx\r\n`      | Sleep timer (10 s units)                 | `000` = Never, `001` = 10 s … `255` = 42 min 30 s                     |
 | `@0PTBTSTxx\r\n`         | Pairing button state                     | `00` = not pressed, `01` = pressed                                    |
 | `@0PTBTLTxx\r\n`         | Pairing telemetry (LED status)           | `00` = LED off<br>`01` = LED blue = Connected<br>`02` = LED red = Disconnected<br>`00`+`01` blinking (after press on button) = Connecting...<br>`01`+`02` blinking (after long press on button) = Pairing…                      |
-
----
-
-### HomeAssistant Lovelace Tile
-<img width="512" alt="tiles" src="https://github.com/user-attachments/assets/9c797418-38dd-489e-b732-b0d219980ce5"/>
-
