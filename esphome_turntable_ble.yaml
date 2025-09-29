@@ -563,14 +563,6 @@ fan:
                   service_uuid: "FFF0"
                   characteristic_uuid: "FFF2"
                   value: [0x40, 0x30, 0x50, 0x54, 0x54, 0x54, 0x53, 0x54, 0x30, 0x31, 0x0D, 0x0A]
-              - fan.turn_on:
-                  id: turntable_fan
-                  speed: !lambda |-
-                    int rpm = id(speed_val);
-                    if (rpm == 33) return 1;
-                    if (rpm == 45) return 2;
-                    if (rpm == 78) return 3;
-                    return 1;
             else:
               - ble_client.ble_write:
                   id: turntable
